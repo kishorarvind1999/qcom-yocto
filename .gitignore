@@ -1,8 +1,5 @@
 # Yocto build output
-build*/tmp*
-build*/work*
-build*/buildstats*
-build*/cache/
+build-qcom-wayland/
 
 # Shared state cache
 sstate-cache/
