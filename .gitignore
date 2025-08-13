@@ -1,0 +1,25 @@
+# Yocto build output
+build*/tmp*
+build*/work*
+build*/buildstats*
+build*/cache/
+
+# Shared state cache
+sstate-cache/
+
+# Downloaded sources
+downloads/
+
+# Logs and temp files
+*.log
+*.lock
+
+# IDE files
+.vscode/
+.idea/
+
+# Repo metadata (from repo tool, not git)
+.repo/
+
+# Misc
+*~ 
