@@ -1,14 +1,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>   
+#include <time.h>
 #include <opus/opus.h>
 #include <lc3.h>
 
 #define SAMPLE_RATE 48000
 #define CHANNELS 1
 #define FRAME_SIZE 480  // 10ms at 48kHz
+#define BITRATE 32000 
 #define MAX_PACKET_SIZE 1000
 #define APPLICATION OPUS_APPLICATION_AUDIO
+
+struct timespec start, end;
+double elapsed_ms_e, elapsed_ms_d;
 
 int test_opus_codec() {
     printf("Testing Opus codec...\n");
@@ -43,7 +49,10 @@ int test_opus_codec() {
     }
     
     // Encode
+    clock_gettime(CLOCK_MONOTONIC, &start);
     int encoded_size = opus_encode(encoder, input, FRAME_SIZE, encoded, MAX_PACKET_SIZE);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    elapsed_ms_e = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_nsec - start.tv_nsec) / 1e3;
     if (encoded_size < 0) {
         printf("Opus encoding failed: %s\n", opus_strerror(encoded_size));
         opus_encoder_destroy(encoder);
@@ -52,7 +61,10 @@ int test_opus_codec() {
     }
     
     // Decode
+    clock_gettime(CLOCK_MONOTONIC, &start);
     int decoded_size = opus_decode(decoder, encoded, encoded_size, output, FRAME_SIZE, 0);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    elapsed_ms_d = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_nsec - start.tv_nsec) / 1e3;
     if (decoded_size < 0) {
         printf("Opus decoding failed: %s\n", opus_strerror(decoded_size));
         opus_encoder_destroy(encoder);
@@ -60,7 +72,7 @@ int test_opus_codec() {
         return -1;
     }
     
-    printf("Opus test successful! Encoded %d bytes, decoded %d samples\n", encoded_size, decoded_size);
+    printf("Opus test successful! \nEncoding time %.3fus \nDecoding time %.3fus\n", elapsed_ms_e, elapsed_ms_d);
     
     opus_encoder_destroy(encoder);
     opus_decoder_destroy(decoder);
@@ -69,94 +81,52 @@ int test_opus_codec() {
 
 int test_lc3_codec() {
     printf("Testing LC3 codec...\n");
-    
-    // LC3 setup for 10ms frame at 48kHz
-    int frame_us = 10000;  // 10ms
-    int srate_hz = 48000;
-    int nchannels = 1;
-    
-    // Get memory requirements
-    unsigned encoder_size = lc3_encoder_size(frame_us, srate_hz);
-    unsigned decoder_size = lc3_decoder_size(frame_us, srate_hz);
-    
-    // Allocate memory
-    void *encoder_mem = malloc(encoder_size);
-    void *decoder_mem = malloc(decoder_size);
-    
-    if (!encoder_mem || !decoder_mem) {
-        printf("Failed to allocate LC3 codec memory\n");
-        free(encoder_mem);
-        free(decoder_mem);
-        return -1;
-    }
-    
-    // Setup encoder/decoder
-    lc3_encoder_t encoder = lc3_setup_encoder(frame_us, srate_hz, 0, encoder_mem);
-    lc3_decoder_t decoder = lc3_setup_decoder(frame_us, srate_hz, 0, decoder_mem);
-    
-    if (!encoder || !decoder) {
-        printf("Failed to setup LC3 codec\n");
-        free(encoder_mem);
-        free(decoder_mem);
-        return -1;
-    }
-    
-    // Test data
-    int frame_samples = lc3_frame_samples(frame_us, srate_hz);
-    int16_t *input = malloc(frame_samples * sizeof(int16_t));
-    int16_t *output = malloc(frame_samples * sizeof(int16_t));
-    uint8_t *encoded = malloc(1000);  // Generous buffer
-    
-    if (!input || !output || !encoded) {
-        printf("Failed to allocate LC3 test buffers\n");
-        free(encoder_mem);
-        free(decoder_mem);
-        free(input);
-        free(output);
-        free(encoded);
-        return -1;
-    }
-    
-    // Generate test sine wave
-    for (int i = 0; i < frame_samples; i++) {
-        input[i] = (int16_t)(32767.0 * sin(2.0 * 3.14159 * 440.0 * i / srate_hz));
-    }
-    
-    // Encode
-    int bitrate = 64000;  // 64 kbps
-    int encoded_size = lc3_encode(encoder, LC3_PCM_FORMAT_S16, input, nchannels, bitrate, encoded);
-    
-    if (encoded_size <= 0) {
-        printf("LC3 encoding failed\n");
-        free(encoder_mem);
-        free(decoder_mem);
-        free(input);
-        free(output);
-        free(encoded);
-        return -1;
-    }
-    
-    // Decode
-    int ret = lc3_decode(decoder, encoded, encoded_size, LC3_PCM_FORMAT_S16, output, nchannels);
-    
-    if (ret != 0) {
-        printf("LC3 decoding failed\n");
-        free(encoder_mem);
-        free(decoder_mem);
-        free(input);
-        free(output);
-        free(encoded);
-        return -1;
-    }
-    
-    printf("LC3 test successful! Encoded %d bytes for %d samples\n", encoded_size, frame_samples);
-    
-    // Cleanup
-    free(encoder_mem);
-    free(decoder_mem);
-    free(input);
-    free(output);
-    free(encoded);
+
+    const int frame_us = 10000;   // 10 ms
+
+    unsigned enc_sz = lc3_encoder_size(frame_us, SAMPLE_RATE);
+    unsigned dec_sz = lc3_decoder_size(frame_us, SAMPLE_RATE);
+    void *enc_mem = malloc(enc_sz);
+    void *dec_mem = malloc(dec_sz);
+    if (!enc_mem || !dec_mem) { printf("LC3 mem alloc failed\n"); return -1; }
+
+    lc3_encoder_t enc = lc3_setup_encoder(frame_us, SAMPLE_RATE, 0, enc_mem);
+    lc3_decoder_t dec = lc3_setup_decoder(frame_us, SAMPLE_RATE, 0, dec_mem);
+    if (!enc || !dec) { printf("LC3 setup failed\n"); return -1; }
+
+    int frame_samples = lc3_frame_samples(frame_us, SAMPLE_RATE);
+    int nbytes = lc3_frame_bytes(frame_us, BITRATE); 
+
+    int16_t *in  = malloc(frame_samples * sizeof(int16_t));
+    int16_t *out = malloc(frame_samples * sizeof(int16_t));
+    uint8_t *bit = malloc(nbytes);
+    if (!in || !out || !bit) { printf("LC3 buffer alloc failed\n"); return -1; }
+
+    // Sine
+    for (int i = 0; i < frame_samples; i++)
+        in[i] = (int16_t)(32767.0 * sin(2.0 * 3.14159 * 440.0 * i / SAMPLE_RATE));
+
+    // Encode: returns status (0 success), NOT size
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    int rc = lc3_encode(enc, LC3_PCM_FORMAT_S16, in, 1, nbytes, bit);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    elapsed_ms_e = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_nsec - start.tv_nsec) / 1e3;
+
+    if (rc != 0) { printf("LC3 encode failed (rc=%d)\n", rc); return -1; }
+
+    // Decode: pass the same nbytes you asked the encoder to produce
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    rc = lc3_decode(dec, bit, nbytes, LC3_PCM_FORMAT_S16, out, 1);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    elapsed_ms_d = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_nsec - start.tv_nsec) / 1e3;
+
+    if (rc < 0) { printf("LC3 decode failed (rc=%d)\n", rc); return -1; }
+    if (rc == 1) printf("Decoder performed PLC\n");
+
+    printf("LC3 test successful! \nEncoding time %.3fus \nDecoding time %.3fus\n", elapsed_ms_e, elapsed_ms_d);
+
+    free(in); free(out); free(bit);
+    free(enc_mem); free(dec_mem);
     return 0;
 }
 
