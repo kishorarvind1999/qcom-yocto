@@ -1,3 +1,4 @@
+#define _GNU_SOURCE 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,7 +6,9 @@
 #include <time.h>
 #include <opus/opus.h>
 #include <lc3.h>
-
+#include <sched.h>
+#include <unistd.h>
+#include <sys/syscall.h>
 
 #define SAMPLE_RATE 48000
 #define CHANNELS 1
@@ -15,7 +18,7 @@
 #define APPLICATION OPUS_APPLICATION_AUDIO
 
 struct timespec start, end;
-double elapsed_ms_e, elapsed_ms_d;
+double elapsed_ms_e, elapsed_ms_d, avg_ms_e, avg_ms_d;
 
 int test_opus_codec() {
     printf("Testing Opus codec...\n");
@@ -49,36 +52,50 @@ int test_opus_codec() {
         input[i] = (opus_int16)(32767.0 * sin(2.0 * 3.14159 * 440.0 * i / SAMPLE_RATE));
     }
     
-    // Encode
-    clock_gettime(CLOCK_MONOTONIC, &start);
-    int encoded_size = opus_encode(encoder, input, FRAME_SIZE, encoded, MAX_PACKET_SIZE);
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    elapsed_ms_e = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_nsec - start.tv_nsec) / 1e3;
-    if (encoded_size < 0) {
-        printf("Opus encoding failed: %s\n", opus_strerror(encoded_size));
-        opus_encoder_destroy(encoder);
-        opus_decoder_destroy(decoder);
-        return -1;
+    double total_encode_us = 0.0, total_decode_us = 0.0;
+    int encoded_size = 0, decoded_size = 0;
+
+    for (int i = 0; i < 100; i++) {
+        // Encode
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        encoded_size = opus_encode(encoder, input, FRAME_SIZE, encoded, MAX_PACKET_SIZE);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        double elapsed_us = (end.tv_sec - start.tv_sec) * 1e6 + (end.tv_nsec - start.tv_nsec) / 1e3;
+        total_encode_us += elapsed_us;
+
+        if (encoded_size < 0) {
+            printf("Opus encoding failed: %s\n", opus_strerror(encoded_size));
+            opus_encoder_destroy(encoder);
+            opus_decoder_destroy(decoder);
+            return -1;
+        }
+
+        // Decode
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        decoded_size = opus_decode(decoder, encoded, encoded_size, output, FRAME_SIZE, 0);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        elapsed_us = (end.tv_sec - start.tv_sec) * 1e6 + (end.tv_nsec - start.tv_nsec) / 1e3;
+        total_decode_us += elapsed_us;
+
+        if (decoded_size < 0) {
+            printf("Opus decoding failed: %s\n", opus_strerror(decoded_size));
+            opus_encoder_destroy(encoder);
+            opus_decoder_destroy(decoder);
+            return -1;
+        }
     }
-    
-    // Decode
-    clock_gettime(CLOCK_MONOTONIC, &start);
-    int decoded_size = opus_decode(decoder, encoded, encoded_size, output, FRAME_SIZE, 0);
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    elapsed_ms_d = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_nsec - start.tv_nsec) / 1e3;
-    if (decoded_size < 0) {
-        printf("Opus decoding failed: %s\n", opus_strerror(decoded_size));
-        opus_encoder_destroy(encoder);
-        opus_decoder_destroy(decoder);
-        return -1;
-    }
-    
-    printf("Opus test successful! \nEncoding time %.3fus \nDecoding time %.3fus\n", elapsed_ms_e, elapsed_ms_d);
+
+    avg_ms_e = total_encode_us / 100.0;
+    avg_ms_d = total_decode_us / 100.0;
+
+    printf("Opus test successful! \nAvg Encoding time %.3f µs \nAvg Decoding time %.3f µs\n",
+           avg_ms_e, avg_ms_d);
     
     opus_encoder_destroy(encoder);
     opus_decoder_destroy(decoder);
     return 0;
 }
+
 
 int test_lc3_codec() {
     printf("Testing LC3 codec...\n");
@@ -107,33 +124,71 @@ int test_lc3_codec() {
     for (int i = 0; i < frame_samples; i++)
         in[i] = (int16_t)(32767.0 * sin(2.0 * 3.14159 * 440.0 * i / SAMPLE_RATE));
 
-    // Encode: returns status (0 success), NOT size
-    clock_gettime(CLOCK_MONOTONIC, &start);
-    int rc = lc3_encode(enc, LC3_PCM_FORMAT_S16, in, 1, nbytes, bit);
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    elapsed_ms_e = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_nsec - start.tv_nsec) / 1e3;
+    double total_encode_us = 0.0, total_decode_us = 0.0;
+    int rc = 0;
 
-    if (rc != 0) { printf("LC3 encode failed (rc=%d)\n", rc); return -1; }
+    for (int i = 0; i < 100; i++) {
+        // Encode
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        rc = lc3_encode(enc, LC3_PCM_FORMAT_S16, in, 1, nbytes, bit);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        double elapsed_us = (end.tv_sec - start.tv_sec) * 1e6 +
+                            (end.tv_nsec - start.tv_nsec) / 1e3;
+        total_encode_us += elapsed_us;
 
-    // Decode: pass the same nbytes you asked the encoder to produce
-    clock_gettime(CLOCK_MONOTONIC, &start);
-    rc = lc3_decode(dec, bit, nbytes, LC3_PCM_FORMAT_S16, out, 1);
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    elapsed_ms_d = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_nsec - start.tv_nsec) / 1e3;
+        if (rc != 0) { 
+            printf("LC3 encode failed (rc=%d)\n", rc); 
+            return -1; 
+        }
 
-    if (rc < 0) { printf("LC3 decode failed (rc=%d)\n", rc); return -1; }
-    if (rc == 1) printf("Decoder performed PLC\n");
+        // Decode
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        rc = lc3_decode(dec, bit, nbytes, LC3_PCM_FORMAT_S16, out, 1);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        elapsed_us = (end.tv_sec - start.tv_sec) * 1e6 +
+                     (end.tv_nsec - start.tv_nsec) / 1e3;
+        total_decode_us += elapsed_us;
 
-    printf("LC3 test successful! \nEncoding time %.3fus \nDecoding time %.3fus\n", elapsed_ms_e, elapsed_ms_d);
+        if (rc < 0) { 
+            printf("LC3 decode failed (rc=%d)\n", rc); 
+            return -1; 
+        }
+        if (rc == 1) printf("Decoder performed PLC\n");
+    }
 
+    avg_ms_e = total_encode_us / 100.0;
+    avg_ms_d = total_decode_us / 100.0;
+
+    printf("LC3 test successful! \nAvg Encoding time %.3f µs \nAvg Decoding time %.3f µs\n", avg_ms_e, avg_ms_d);
+    
     free(in); free(out); free(bit);
     free(enc_mem); free(dec_mem);
     return 0;
 }
 
-int main() {
-    printf("Starting audio codec smoke test...\n");
-    printf("========================================\n");
+
+void pin_to_core(int core_id) {
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    CPU_SET(core_id, &mask);
+
+    pid_t tid = syscall(__NR_gettid);  // get current thread ID
+    if (sched_setaffinity(tid, sizeof(mask), &mask) != 0) {
+        perror("sched_setaffinity failed");
+    } else {
+        printf("Pinned to core %d\n", core_id);
+    }
+}
+
+
+int main(int argc, char *argv[]) {    
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <core_number>\n", argv[0]);
+        return 1;
+    }
+
+    int core = atoi(argv[1]);   
+    pin_to_core(core);          // pin process to specified core
     
     if (test_opus_codec() != 0) {
         printf("Opus test failed!\n");
@@ -147,7 +202,6 @@ int main() {
         return 1;
     }
     
-    printf("\n========================================\n");
-    printf("All codec tests passed successfully!\n");
+    printf("All codec tests passed successfully!\n\n\n");
     return 0;
 }
