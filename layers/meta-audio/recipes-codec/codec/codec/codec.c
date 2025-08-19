@@ -6,6 +6,7 @@
 #include <opus/opus.h>
 #include <lc3.h>
 
+
 #define SAMPLE_RATE 48000
 #define CHANNELS 1
 #define FRAME_SIZE 480  // 10ms at 48kHz
