@@ -16,7 +16,7 @@ downloads/
 .idea/
 
 # Repo metadata (from repo tool, not git)
-.repo/
+#.repo/
 
 # Misc
 *~ 

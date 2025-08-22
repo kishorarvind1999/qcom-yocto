@@ -6,6 +6,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 SRC_URI = " \
     file://codec.c \
     file://input.pcm \
+    file://49.wav \
 "
 
 S = "${WORKDIR}"
@@ -22,4 +23,5 @@ do_install() {
 
          install -d ${D}${datadir}/${PN}
          install -m 0644 ${WORKDIR}/input.pcm ${D}${datadir}/${PN}/
+         install -m 0644 ${WORKDIR}/49.wav ${D}${datadir}/${PN}/
 }

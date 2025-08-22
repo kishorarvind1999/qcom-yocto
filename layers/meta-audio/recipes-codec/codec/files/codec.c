@@ -12,16 +12,17 @@
 
 #define SAMPLE_RATE 48000
 #define CHANNELS 1
-#define FRAME_SIZE 480  // 10ms at 48kHz
-#define BITRATE 32000 
+#define FRAME_DURATION_MS 10
+#define FRAME_SIZE SAMPLE_RATE * FRAME_DURATION_MS/1000 
+#define BITRATE 64000 
 #define MAX_PACKET_SIZE 1000
 #define APPLICATION OPUS_APPLICATION_AUDIO
 
 struct timespec start, end;
 double total_encode_us, total_decode_us, avg_ms_e, avg_ms_d;
-int encoded_size, decoded_size, loop_count = 0;
+int encoded_size, decoded_size, frame_count = 0;
 
-int test_opus_codec(FILE *fp) {
+int test_opus_codec(FILE *fp, FILE *fp_opus) {
     printf("Testing Opus codec...\n");
     
     OpusEncoder *encoder;
@@ -34,6 +35,8 @@ int test_opus_codec(FILE *fp) {
         printf("Failed to create Opus encoder: %s\n", opus_strerror(err));
         return -1;
     }
+
+    opus_encoder_ctl(encoder, OPUS_SET_BITRATE(BITRATE)); // Set desired bitrate
     
     // Create decoder
     decoder = opus_decoder_create(SAMPLE_RATE, CHANNELS, &err);
@@ -75,17 +78,23 @@ int test_opus_codec(FILE *fp) {
             opus_decoder_destroy(decoder);
             return -1;
         }
+        
+        // Write output to file
+        fwrite(output, sizeof(opus_int16), decoded_size * CHANNELS, fp_opus);
 
-        loop_count++;
+        frame_count++;
     }
-    printf("Loop Count: %d\n", loop_count);
+    printf("Frame Count: %d\n", frame_count);
 
-    avg_ms_e = total_encode_us / loop_count;
-    avg_ms_d = total_decode_us / loop_count;
-    loop_count = 0; // Reset for next test
-
-    printf("Opus test successful! \nAvg Encoding time %.3f µs \nAvg Decoding time %.3f µs\n",
-           avg_ms_e, avg_ms_d);
+    if (frame_count > 0) {
+        avg_ms_e = total_encode_us / frame_count;
+        avg_ms_d = total_decode_us / frame_count;
+        frame_count = 0; // Reset for next test
+        printf("Opus test successful! \n \
+            Total Encoding time: %.3f ms \t Per frame: %.3f µs\n \
+            Total Decoding time: %.3f ms \t Per frame: %.3f µs\n",
+            total_encode_us/1000, avg_ms_e, total_decode_us/1000, avg_ms_d);
+    }
     
     opus_encoder_destroy(encoder);
     opus_decoder_destroy(decoder);
@@ -93,7 +102,7 @@ int test_opus_codec(FILE *fp) {
 }
 
 
-int test_lc3_codec(FILE *fp) {
+int test_lc3_codec(FILE *fp, FILE *fp_lc3) {
     printf("Testing LC3 codec...\n");
 
     const int frame_us = 10000;   // 10 ms
@@ -144,16 +153,23 @@ int test_lc3_codec(FILE *fp) {
         }
         if (decoded_size == 1) printf("Decoder performed PLC\n");
 
-        loop_count++;
+        // Write output to file
+        fwrite(out, sizeof(opus_int16), decoded_size * CHANNELS, fp_lc3);
+
+        frame_count++;
     }
 
-    printf("Loop Count: %d\n", loop_count);
+    printf("Frame Count: %d\n", frame_count);
 
-    avg_ms_e = total_encode_us / loop_count;
-    avg_ms_d = total_decode_us / loop_count;
-    loop_count = 0; // Reset for next test
-
-    printf("LC3 test successful! \nAvg Encoding time %.3f µs \nAvg Decoding time %.3f µs\n", avg_ms_e, avg_ms_d);
+    if (frame_count > 0) {
+        avg_ms_e = total_encode_us / frame_count;
+        avg_ms_d = total_decode_us / frame_count;
+        frame_count = 0; // Reset for next test
+        printf("LC3 test successful! \n \
+            Total Encoding time: %.3f ms \t Per frame: %.3f µs\n \
+            Total Decoding time: %.3f ms \t Per frame: %.3f µs\n",
+            total_encode_us/1000, avg_ms_e, total_decode_us/1000, avg_ms_d);
+    }
     
     free(in); free(out); free(bit);
     free(enc_mem); free(dec_mem);
@@ -170,7 +186,7 @@ void pin_to_core(int core_id) {
     if (sched_setaffinity(tid, sizeof(mask), &mask) != 0) {
         perror("sched_setaffinity failed");
     } else {
-        printf("Pinned to core %d\n", core_id);
+        printf("Pinned to core %d\n\n", core_id);
     }
 }
 
@@ -185,12 +201,14 @@ int main(int argc, char *argv[]) {
     pin_to_core(core);          // pin process to specified core
     
     FILE *fp = fopen(argv[2], "rb");
-    if (!fp) {
+    FILE *fp_opus = fopen("/tmp/codec/opus_output.pcm", "wb");
+    FILE *fp_lc3 = fopen("/tmp/codec/lc3_output.pcm", "wb");
+    if (!fp || !fp_opus || !fp_lc3) {
         perror("Failed to open input file");
         return 1;
     }
 
-    if (test_opus_codec(fp) != 0) {
+    if (test_opus_codec(fp, fp_opus) != 0) {
         printf("Opus test failed!\n");
         fclose(fp);
         return 1;
@@ -200,13 +218,13 @@ int main(int argc, char *argv[]) {
 
     printf("\n");
     
-    if (test_lc3_codec(fp) != 0) {
+    if (test_lc3_codec(fp, fp_lc3) != 0) {
         printf("LC3 test failed!\n");
         fclose(fp);
         return 1;
     }
     
     fclose(fp);
-    printf("All codec tests passed successfully!\n\n\n");
+    printf("\nAll codec tests passed successfully!\n\n\n");
     return 0;
 }
